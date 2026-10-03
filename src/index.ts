@@ -2,6 +2,7 @@ import core from "@actions/core";
 import { UALogin, getRawSecret, getRawSecrets, oidcLogin, awsIamLogin, createAxiosInstance } from "./infisical";
 import fs from "fs/promises";
 import { AuthMethod } from "./constants";
+import { parseSecretMappings } from "./mappings";
 
 function parseHeadersInput(inputKey: string) {
 	const rawHeadersString = core.getInput(inputKey) || "";
@@ -47,6 +48,7 @@ const main = async () => {
 		const shouldIncludeImports = core.getBooleanInput("include-imports");
 		const shouldRecurse = core.getBooleanInput("recursive");
 		const extraHeaders = parseHeadersInput("extra-headers");
+		const secretMappings = parseSecretMappings(core.getInput("secrets"));
 
 		if (!projectId && !projectSlug) {
 			throw new Error("Either `project-id` or `project-slug` must be set");
@@ -97,32 +99,67 @@ const main = async () => {
 				throw new Error(`Invalid authentication method: ${method}`);
 		}
 
+		if (secretMappings.length > 0 && (secretName || shouldRecurse || core.getInput("secret-path") !== "/")) {
+			core.warning("The `secret-path`, `secret-name` and `recursive` inputs are ignored when `secrets` is set");
+		}
 		if (secretName && shouldRecurse) {
 			core.warning("The `recursive` input is ignored when `secret-name` is set");
 		}
 
 		// get secrets from Infisical using input params
-		const keyValueSecrets = secretName
-			? await getRawSecret({
+		let keyValueSecrets: Record<string, string>;
+
+		if (secretMappings.length > 0) {
+			// fetch each distinct path once, then pick the mapped secrets from it
+			const uniquePaths = [...new Set(secretMappings.map(mapping => mapping.secretPath))];
+			const secretsByPath: Record<string, Record<string, string>> = {};
+
+			for (const path of uniquePaths) {
+				secretsByPath[path] = await getRawSecrets({
 					axiosInstance,
 					envSlug,
 					infisicalToken,
 					projectId,
 					projectSlug,
-					secretPath,
-					secretName,
-					shouldIncludeImports
-				})
-			: await getRawSecrets({
-					axiosInstance,
-					envSlug,
-					infisicalToken,
-					projectId,
-					projectSlug,
-					secretPath,
+					secretPath: path,
 					shouldIncludeImports,
-					shouldRecurse
+					shouldRecurse: false
 				});
+			}
+
+			keyValueSecrets = {};
+			for (const mapping of secretMappings) {
+				const value = secretsByPath[mapping.secretPath][mapping.secretName];
+				if (value === undefined) {
+					throw new Error(
+						`Secret "${mapping.secretName}" was not found at path "${mapping.secretPath}" in environment "${envSlug}" of project "${projectId || projectSlug}"`
+					);
+				}
+				keyValueSecrets[mapping.envName] = value;
+			}
+		} else {
+			keyValueSecrets = secretName
+				? await getRawSecret({
+						axiosInstance,
+						envSlug,
+						infisicalToken,
+						projectId,
+						projectSlug,
+						secretPath,
+						secretName,
+						shouldIncludeImports
+					})
+				: await getRawSecrets({
+						axiosInstance,
+						envSlug,
+						infisicalToken,
+						projectId,
+						projectSlug,
+						secretPath,
+						shouldIncludeImports,
+						shouldRecurse
+					});
+		}
 
 		core.debug(`Exporting the following envs", ${JSON.stringify(Object.keys(keyValueSecrets))}`);
 
