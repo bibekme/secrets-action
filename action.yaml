@@ -46,6 +46,9 @@ inputs:
     description: "Source path, example: `/my-secret-path`"
     required: false
     default: "/"
+  secrets:
+    description: "Fetch specific secrets from one or more paths and export them under custom names. One mapping per line: `/path/to/secret-name > ENV_VAR_NAME`. When set, `secret-path`, `secret-name` and `recursive` are ignored"
+    required: false
   secret-name:
     description: "If set, only the secret with this name will be fetched from `secret-path`, instead of every secret in the path"
     required: false
